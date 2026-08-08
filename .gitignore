@@ -1,0 +1,26 @@
+# Virtual machine files — far too large for Git
+*.vmdk
+*.vmx
+*.vmem
+*.vmsn
+*.nvram
+*.vmss
+*.vmxf
+
+# Secrets — never commit
+*.key
+*.pem
+*credentials*
+*password*
+secrets/
+
+# Raw data that may contain real information
+*.evtx
+*.pcap
+exports/
+provisioning-log.csv
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store
