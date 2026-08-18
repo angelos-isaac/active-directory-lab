@@ -1,6 +1,6 @@
 # Active Directory Lab — Isaac Solutions
 
-A Windows Server 2025 Active Directory environment built from scratch in VMware, hardened with Group Policy, and then audited against CIS Controls v8.
+Windows Server 2025 Active Directory lab — Group Policy hardening, a CIS Controls v8 access review, and Sysmon/Wazuh detection engineering
 
 ![Lab architecture](images/architecture-diagram.png)
 
