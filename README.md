@@ -30,6 +30,7 @@ This lab simulates a small business network running Active Directory Domain Serv
 | FS01 | File server | Windows Server 2025 | 10.10.10.20 |
 | WKS01 | Management workstation (RSAT) | Windows 11 Enterprise | DHCP |
 | WKS02 | Standard endpoint | Windows 11 Enterprise | DHCP |
+| SIEM01 | Wazuh manager, indexer, dashboard | Ubuntu Server 24.04 LTS | 10.10.10.30 |
 
 **Domain:** `corp.isaacsolutions.lab` (NetBIOS `CORP`)
 **Subnet:** `10.10.10.0/24`, isolated NAT network
