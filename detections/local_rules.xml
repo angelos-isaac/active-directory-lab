@@ -1,0 +1,37 @@
+<!--
+  Custom Wazuh rules for corp.isaacsolutions.lab
+  Deployed to /var/ossec/etc/rules/local_rules.xml on SIEM01
+
+  Rule IDs 100100+ are reserved for local rules by Wazuh convention.
+
+  Validate before restarting the manager:
+    sudo /var/ossec/bin/wazuh-analysisd -t
+
+  A rule that fails validation prevents the manager from starting. A rule that
+  passes validation may still match nothing — see the note on regex below.
+-->
+
+<group name="sysmon,attack,">
+
+  <!--
+    T1136.001 - Create Account: Local Account
+
+    Matches both net.exe and net1.exe. net.exe is a thin wrapper that delegates
+    to net1.exe, which performs the actual account creation. A rule matching
+    only net.exe would miss any invocation of net1.exe directly.
+
+    type="pcre2" is required. Wazuh uses OS_Regex by default, where this
+    pattern is syntactically valid but does not match. The rule loads without
+    error and never fires.
+  -->
+  <rule id="100100" level="12">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\net1?\.exe$</field>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)user\s+/add</field>
+    <description>Local account creation via net.exe (T1136.001)</description>
+    <mitre>
+      <id>T1136.001</id>
+    </mitre>
+  </rule>
+
+</group>

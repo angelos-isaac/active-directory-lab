@@ -1,17 +1,50 @@
 # Detections
 
-**Status: not yet implemented.** This directory is a placeholder for the detection engineering phase. See [`docs/08-logging-and-detection.md`](../docs/08-logging-and-detection.md) for the planned design.
-
-The audit configuration these detections will depend on is complete and verified — advanced audit policy, command line process auditing, PowerShell script block logging, and object access auditing with SACLs. That work is documented in [`docs/06-group-policy.md`](../docs/06-group-policy.md) and [`docs/07-file-server-and-permissions.md`](../docs/07-file-server-and-permissions.md).
-
-## Planned contents
+Custom Wazuh rules written against telemetry from this environment, with the tuning analysis behind them.
 
 | File | Contents |
 |---|---|
-| `local_rules.xml` | Rule source as deployed to `/var/ossec/etc/rules/` |
-| `T1136.001-account-creation.md` | Telemetry, rule, alert, and tuning for account creation |
-| `tuning-notes.md` | False positives encountered and how each was resolved |
+| [`local_rules.xml`](local_rules.xml) | Rule source as deployed to `/var/ossec/etc/rules/` on SIEM01 |
+| [`tuning-notes.md`](tuning-notes.md) | False positive analysis and baselines |
 
-## Verify before trusting a rule
+Execution detail and evidence: [`docs/08-logging-and-detection.md`](../docs/08-logging-and-detection.md)
 
-Parent rule IDs and decoded field names differ between Wazuh versions. A rule with the wrong parent produces no alert and no error, so rules will be validated against live events with `sudo /var/ossec/bin/wazuh-logtest` before being recorded as working.
+---
+
+## Rules
+
+| ID | Level | Technique | Detects |
+|---|---|---|---|
+| 100100 | 12 | T1136.001 | Local account creation via `net.exe` or `net1.exe` |
+
+---
+
+## Validate before trusting a rule
+
+Two independent failure modes, and neither produces a useful error.
+
+**Syntax errors prevent the manager from starting.** Validate first:
+
+```bash
+sudo /var/ossec/bin/wazuh-analysisd -t
+```
+
+Silence means the ruleset parsed.
+
+**A syntactically valid rule can still match nothing.** Wazuh uses OS_Regex by default, not PCRE2. A pattern written with PCRE2 habits loads cleanly and never fires. Field names and `if_group` values are also version-specific.
+
+The reliable way to write a rule is to read the shipped ruleset and copy how its authors do it:
+
+```bash
+sudo head -30 /var/ossec/ruleset/rules/0800-sysmon_id_1.xml
+```
+
+That file shows the correct group name, field paths, and the `type="pcre2"` attribute. Faster than guessing, and it is version-accurate by definition.
+
+**And confirm the manager actually restarted:**
+
+```bash
+sudo systemctl status wazuh-manager --no-pager | head -5
+```
+
+An uptime in hours means the rule file was never re-read.

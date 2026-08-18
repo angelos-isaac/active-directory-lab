@@ -18,6 +18,7 @@ This lab simulates a small business network running Active Directory Domain Serv
 - Group Policy for password baselines, Windows LAPS, and advanced audit configuration
 - Least-privilege file share access using the AGDLP model, with object access auditing
 - An access control review against CIS Controls v8, remediated and retested with evidence
+- Host telemetry with Sysmon and Wazuh, attack simulation, and custom detection rules
 
 ---
 
@@ -57,7 +58,7 @@ Full design rationale: [`docs/00-architecture.md`](docs/00-architecture.md)
 | [File server and permissions](docs/07-file-server-and-permissions.md) | AGDLP implementation, share auditing |
 | **[Failure log](docs/failure-log.md)** | Problems encountered and how they were diagnosed |
 | [Lessons learned](docs/lessons-learned.md) | Retrospective |
-| [Logging and detection](docs/08-logging-and-detection.md) | Planned — not yet implemented |
+| [Logging and detection](docs/08-logging-and-detection.md) | Sysmon, Wazuh SIEM, attack simulation, custom detection rules |
 
 ---
 
@@ -122,11 +123,28 @@ The register also records one **risk acceptance** rather than a remediation. The
 
 ---
 
+### Detection engineering
+
+[`docs/08-logging-and-detection.md`](docs/08-logging-and-detection.md) · [`detections/`](detections/)
+
+Sysmon deployed across all four Windows endpoints, forwarding to a Wazuh manager on a dedicated Ubuntu host. Attack techniques executed with Atomic Red Team against the domain, and detections written against the resulting telemetry.
+
+![Custom rule detection](images/t1136-custom-rule-detection.png)
+
+**T1136.001, local account creation.** Reading the raw Sysmon event before writing any rule showed that `net.exe` delegates to `net1.exe`, which performs the actual work. A rule matching only `net.exe` would miss any direct invocation of the second binary. Rule 100100 matches both and fires twice, 100 milliseconds apart.
+
+**T1003.001, LSASS credential dumping.** Checking the telemetry before testing revealed that the widely-used SwiftOnSecurity Sysmon config ships with `ProcessAccess` monitoring effectively disabled, meaning credential dumping would generate no process access events at all. After enabling it scoped to LSASS and baselining normal access, the technique itself was blocked by Microsoft Defender before the detection layer was reached.
+
+The rule development took four attempts, three of which produced no error at all. Written up in [FL-005](docs/failure-log.md).
+
+---
+
 ## Scripts
 
 | Script | Purpose |
 |---|---|
 | [`New-LabUsers.ps1`](scripts/provisioning/New-LabUsers.ps1) | Bulk user provisioning from CSV with rollback and logging |
+| [`local_rules.xml`](detections/local_rules.xml) | Custom Wazuh detection rules |
 
 All scripts include comment-based help. Run `Get-Help .\ScriptName.ps1 -Full` for details.
 
@@ -141,6 +159,8 @@ All scripts include comment-based help. Run `Get-Help .\ScriptName.ps1 -Full` fo
 **Auditing has two independent layers.** Audit policy enables a category across endpoints; the SACL specifies which objects within it are watched. Both are required, and applying them in the wrong order silently removes the audit configuration entirely.
 
 **DNS is the dependency everything rests on.** A client with working internet and the wrong DNS server has full connectivity and zero domain functionality. The failure looks nothing like the cause, which is why it is worth checking first every time.
+
+**Check the telemetry exists before writing the detection.** Twice in this build I was about to write a rule against data that was not being collected. Finding that out first is the difference between a detection that works and one that appears to.
 
 ---
 

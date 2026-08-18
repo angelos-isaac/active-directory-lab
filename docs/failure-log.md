@@ -123,3 +123,109 @@ Configuring a GPO and applying a GPO are not the same thing. All the settings wo
 link has zero effect on anything.
 
 This is also the second time I've been caught by a command that returns nothing instead of an error. In FL-002 the script said SKIPPED when accounts were broken, and here LAPS returned blank when policy had never been applied. Both times I assumed no error meant no problem. Empty output isn't the same as success, it usually just means the thing you're asking about doesn't exist yet, and the useful question is why it doesn't exist rather than why the command didn't work.
+---
+
+## FL-004 — Sysmon GPO deployment: five failures, every one silent
+
+**Phase:** Part 11, Logging and detection  ·  **Systems:** DC01, WKS01, WKS02  ·  **Time lost:** ~2 hours
+
+**Symptom**
+
+Created a GPO to deploy Sysmon via a startup script, linked it to both `IS-Computers` and `Domain Controllers`, verified both links, and rebooted. `Get-Service Sysmon64` returned nothing. No error anywhere, on any machine.
+
+**Investigation**
+
+- Confirmed the GPO was applying with `gpresult /r /scope:computer`. It was listed under Applied Group Policy Objects.
+- Ran the install command manually with the same UNC path and it worked immediately, which ruled out the binary, the config file, and permissions.
+- Checked `Get-ExecutionPolicy -List` on WKS01. Every scope showed `Undefined`, which reads as "no restriction" and is not. With nothing explicitly set, the effective policy falls back to the OS default, and on Windows 11 client that is `Restricted`. `Get-ExecutionPolicy` on its own confirmed it.
+- Fixed that via GPO, rebooted, still nothing.
+- Checked the script file itself. It was still the original 215-byte version without the logging I had added — the edit had never saved.
+- Wrote the logging version, rebooted, still no log file.
+- Checked what the GPO actually had attached:
+
+      ([xml](Get-GPOReport -Name "Sysmon Deployment" -ReportType Xml)).GPO.Computer.ExtensionData.Extension.Script
+
+  The Command field read `SYSMON DEPLOYMENT`. I had put the GPO's own name in the Script Name field instead of `powershell.exe`.
+- Corrected that, rebooted, still nothing. The reboot had run cached policy from before the change.
+
+**Root cause**
+
+Five separate problems, none of which produced an error message:
+
+1. Execution policy `Restricted` on Windows 11 clients blocked `.ps1` execution entirely.
+2. The script file on SYSVOL was never updated with the logging version.
+3. A diagnostic I ran — `Test-Path` to SYSVOL from WKS02 — failed for an unrelated reason. The machine was logged in as a local account with no domain identity, so it could not authenticate to SYSVOL. Startup scripts run as SYSTEM using the computer account and were never affected. This sent me down a false path.
+4. The GPO's Script Name field contained the GPO's name rather than an executable, so Windows tried to run a program that does not exist.
+5. Cached policy ran on reboot before the corrected version had been pulled.
+
+**Resolution**
+
+The diagnostic that finally worked was startup script duration in the Group Policy operational log:
+
+    Get-WinEvent -LogName "Microsoft-Windows-GroupPolicy/Operational" |
+      Where-Object { $_.Id -in 4018,5018 }
+
+A duration of 0 seconds means the executable never launched. Three to five seconds means it ran. That single number distinguished "did not execute" from "executed and failed" and was the only signal that reliably told me which problem I was looking at.
+
+After correcting all five, the script still did not run. I stopped there and installed Sysmon manually on all four endpoints to unblock the detection work, which was the actual objective.
+
+**What I learned**
+
+Group Policy script deployment has an unusually long chain of things that must all be correct, and almost none of them report failure. The GPO can be linked and applying while the script never executes. The script can execute while doing nothing. The file can exist while being the wrong version.
+
+Two things I would do differently. Put logging in the script from the first version rather than adding it after something breaks, because a script that writes a line before it does anything turns a silent failure into a visible one. And check the GPO's actual XML rather than the GUI, since the report shows what Windows will really execute.
+
+The wider lesson is about timeboxing. Five failures in, the deployment mechanism was no longer the thing I was trying to build. Installing manually and writing this up was worth more than another hour of debugging, and knowing when to take the working path is a real decision rather than giving up.
+
+---
+
+## FL-005 — Custom Wazuh rule loaded cleanly and matched nothing
+
+**Phase:** Part 11, Detection engineering  ·  **Systems:** SIEM01  ·  **Time lost:** ~45 min
+
+**Symptom**
+
+Wrote a custom rule to detect local account creation via `net.exe`, added it to `local_rules.xml`, and re-ran the technique. No alerts with that rule ID. No errors anywhere.
+
+**Investigation**
+
+- Searched the dashboard for `100100` and got nothing. Searching `rule.id:100100` also returned nothing, so it was not a query syntax problem.
+- Checked the manager status. Uptime read 4 hours 18 minutes — from the original install. **The manager had never been restarted, so the rule file had never been read.**
+- Restarted it. It failed to start:
+
+      wazuh-analysisd: ERROR: (5107): Syntax error on tag 'win.eventdata.commandLine' in rule 100100
+
+  The forward slash in `user.*\/add` was escaped in PCRE style, which Wazuh's default regex engine does not accept.
+- Fixed that, validated with `wazuh-analysisd -t`, restarted successfully. Re-ran the technique. Still no alerts.
+- Checked `local_rules.xml` again. It was the default file — my edit had never saved. Rewrote it programmatically rather than through the editor.
+- Validated, restarted, re-ran. Still nothing, and this time everything checked out: rule present, ruleset validating, manager uptime in seconds.
+
+**Root cause**
+
+Four problems in sequence, of which the last is the interesting one:
+
+1. The manager was never restarted, so the rule was never loaded.
+2. A `nano` edit did not save, so the file was unchanged.
+3. An escaped forward slash produced a syntax error under OS_Regex.
+4. **The rule was syntactically valid and matched nothing, because Wazuh uses OS_Regex by default rather than PCRE2.** Patterns written with PCRE2 habits load without error and never fire.
+
+**Resolution**
+
+Read Wazuh's own shipped ruleset to see how its authors write the same kind of rule:
+
+    sudo head -30 /var/ossec/ruleset/rules/0800-sysmon_id_1.xml
+
+Every field in that file carries `type="pcre2"`. Adding that attribute to both fields made the rule work:
+
+    <field name="win.eventdata.image" type="pcre2">(?i)\\net1?\.exe$</field>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)user\s+/add</field>
+
+Re-ran the technique and got two hits, 100 milliseconds apart — `net.exe` and `net1.exe`.
+
+**What I learned**
+
+The dangerous failure here is the fourth one. A rule that fails to parse tells you immediately, because the manager will not start. A rule that parses and matches nothing tells you nothing at all, and an empty dashboard looks exactly the same as an absence of malicious activity. In a real environment that is the difference between a detection you have and a detection you think you have.
+
+What solved it was reading the shipped ruleset instead of guessing at syntax. Any rule engine ships with working examples, and those examples are version-accurate by definition in a way that documentation and blog posts are not.
+
+The other thing worth recording is that three of these four failures were not about detection logic at all. The rule was correct fairly early; the manager had not restarted, and then the file had not saved. Config changes need the thing that reads them to actually re-read them, and "no alert" almost never means "the logic is wrong" on the first check.
